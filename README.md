@@ -1,586 +1,609 @@
 -- ============================================================
--- THE CLASSIC SOCCER — SCRIPT V1
+-- THE CLASSIC SOCCER — V2 (Reach + Silent Pass Corrigidos)
 -- Mobile First | Delta Executor | Android
 -- ============================================================
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================================
--- CONFIGURAÇÕES E ESTADO
+-- CONFIGURAÇÕES
 -- ============================================================
 local Config = {
-    HitboxSize = 10,
-    HitboxEnabled = false,
-    HitboxColor = Color3.fromRGB(0, 255, 100),
-    HitboxTransparency = 0.6,
-    SilentPassCooldown = 0.4, -- segundos entre passes para evitar spam
+    ReachSize = 8,
+    ReachEnabled = false,
+    ReachColor = Color3.fromRGB(0, 255, 100),
+    PassCooldown = 0.5,
     LastPassTime = 0,
-    IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled,
+    PassTargetDistanceMin = 8,
+    PassTargetDistanceMax = 200,
+    ForwardBias = 1.5, -- peso para priorizar jogadores à frente
 }
 
 local State = {
-    OriginalSizes = {}, -- armazena tamanhos originais dos HumanoidRootPart
     Connections = {},
-    GuiVisible = true,
+    ReachSphere = nil,
+    ReachConn = nil,
+    PassCooldownActive = false,
 }
 
 -- ============================================================
--- UTILITÁRIOS SEGUROS
+-- UTILITÁRIOS
 -- ============================================================
 local function safeCall(func, ...)
-    local success, result = pcall(func, ...)
-    if not success then
-        warn("[TCS V1] Erro:", result)
-    end
-    return success, result
+    local ok, err = pcall(func, ...)
+    if not ok then warn("[TCS V2]", err) end
+    return ok, err
 end
 
-local function getCharacter()
+local function getChar()
     return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 end
 
-local function getRootPart(character)
-    return character and character:FindFirstChild("HumanoidRootPart")
+local function getHRP(char)
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(char)
+    return char and char:FindFirstChildOfClass("Humanoid")
 end
 
 -- ============================================================
--- INTERFACE GRÁFICA (MOBILE FIRST)
+-- INTERFACE PRINCIPAL (MENU)
 -- ============================================================
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "TCS_V1_GUI"
+ScreenGui.Name = "TCS_V2_GUI"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = game.CoreGui
 
--- Frame Principal
 local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 280, 0, 380)
-MainFrame.Position = UDim2.new(0.5, -140, 0.5, -190)
-MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.Size = UDim2.new(0, 270, 0, 340)
+MainFrame.Position = UDim2.new(0.5, -135, 0.5, -170)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
-MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
+local mc = Instance.new("UICorner", MainFrame)
+mc.CornerRadius = UDim.new(0, 12)
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 12)
-UICorner.Parent = MainFrame
-
--- Barra de Título (arrastável)
 local TitleBar = Instance.new("Frame")
-TitleBar.Name = "TitleBar"
 TitleBar.Size = UDim2.new(1, 0, 0, 45)
-TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
+local tc = Instance.new("UICorner", TitleBar)
+tc.CornerRadius = UDim.new(0, 12)
 
-local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 12)
-TitleCorner.Parent = TitleBar
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -80, 1, 0)
+Title.Position = UDim2.new(0, 12, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Font = Enum.Font.GothamBold
+Title.Text = "TCS V2 — REACH + PASSE"
+Title.TextColor3 = Color3.fromRGB(0, 255, 150)
+Title.TextSize = 13
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TitleBar
 
-local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -80, 1, 0)
-TitleLabel.Position = UDim2.new(0, 15, 0, 0)
-TitleLabel.BackgroundTransparency = 1
-TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.Text = "THE CLASSIC SOCCER — V1"
-TitleLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
-TitleLabel.TextSize = 14
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-TitleLabel.Parent = TitleBar
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 32, 0, 32)
+MinBtn.Position = UDim2.new(1, -68, 0, 6)
+MinBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 75)
+MinBtn.Text = "—"
+MinBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 16
+MinBtn.BorderSizePixel = 0
+MinBtn.Parent = TitleBar
+local mbc = Instance.new("UICorner", MinBtn)
+mbc.CornerRadius = UDim.new(0, 8)
 
--- Botão Minimizar
-local MinimizeBtn = Instance.new("TextButton")
-MinimizeBtn.Size = UDim2.new(0, 35, 0, 35)
-MinimizeBtn.Position = UDim2.new(1, -70, 0, 5)
-MinimizeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
-MinimizeBtn.Text = "—"
-MinimizeBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
-MinimizeBtn.TextSize = 18
-MinimizeBtn.Font = Enum.Font.GothamBold
-MinimizeBtn.BorderSizePixel = 0
-MinimizeBtn.Parent = TitleBar
-local MinCorner = Instance.new("UICorner")
-MinCorner.CornerRadius = UDim.new(0, 8)
-MinCorner.Parent = MinimizeBtn
-
--- Botão Fechar
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 35, 0, 35)
-CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+CloseBtn.Size = UDim2.new(0, 32, 0, 32)
+CloseBtn.Position = UDim2.new(1, -34, 0, 6)
 CloseBtn.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
 CloseBtn.Text = "X"
 CloseBtn.TextColor3 = Color3.fromRGB(255, 120, 120)
-CloseBtn.TextSize = 14
 CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 12
 CloseBtn.BorderSizePixel = 0
 CloseBtn.Parent = TitleBar
-local CloseCorner = Instance.new("UICorner")
-CloseCorner.CornerRadius = UDim.new(0, 8)
-CloseCorner.Parent = CloseBtn
+local cbc = Instance.new("UICorner", CloseBtn)
+cbc.CornerRadius = UDim.new(0, 8)
 
--- Área de Conteúdo (Scroll)
-local ContentFrame = Instance.new("ScrollingFrame")
-ContentFrame.Name = "Content"
-ContentFrame.Size = UDim2.new(1, -20, 1, -55)
-ContentFrame.Position = UDim2.new(0, 10, 0, 50)
-ContentFrame.BackgroundTransparency = 1
-ContentFrame.CanvasSize = UDim2.new(0, 0, 0, 500)
-ContentFrame.ScrollBarThickness = 4
-ContentFrame.ScrollBarImageColor3 = Color3.fromRGB(0, 200, 120)
-ContentFrame.Parent = MainFrame
+local Content = Instance.new("ScrollingFrame")
+Content.Size = UDim2.new(1, -20, 1, -55)
+Content.Position = UDim2.new(0, 10, 0, 50)
+Content.BackgroundTransparency = 1
+Content.CanvasSize = UDim2.new(0, 0, 0, 400)
+Content.ScrollBarThickness = 3
+Content.ScrollBarImageColor3 = Color3.fromRGB(0, 200, 120)
+Content.Parent = MainFrame
 
 -- ============================================================
--- SEÇÃO: HITBOX EXPANDER
+-- SEÇÃO: REACH
 -- ============================================================
-local function createSectionLabel(parent, text, yPos)
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 0, 25)
-    label.Position = UDim2.new(0, 0, 0, yPos)
-    label.BackgroundTransparency = 1
-    label.Font = Enum.Font.GothamBold
-    label.Text = text
-    label.TextColor3 = Color3.fromRGB(100, 200, 255)
-    label.TextSize = 13
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = parent
-    return label
-end
+local ReachLabel = Instance.new("TextLabel")
+ReachLabel.Size = UDim2.new(1, 0, 0, 25)
+ReachLabel.Position = UDim2.new(0, 0, 0, 0)
+ReachLabel.BackgroundTransparency = 1
+ReachLabel.Font = Enum.Font.GothamBold
+ReachLabel.Text = "⚽ REACH (ALCANCE DE CHUTE)"
+ReachLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+ReachLabel.TextSize = 12
+ReachLabel.TextXAlignment = Enum.TextXAlignment.Left
+ReachLabel.Parent = Content
 
-createSectionLabel(ContentFrame, "⚽ HITBOX EXPANDER", 0)
+local ReachToggle = Instance.new("TextButton")
+ReachToggle.Size = UDim2.new(1, 0, 0, 48)
+ReachToggle.Position = UDim2.new(0, 0, 0, 28)
+ReachToggle.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+ReachToggle.Text = "REACH: DESATIVADO"
+ReachToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+ReachToggle.Font = Enum.Font.GothamBold
+ReachToggle.TextSize = 14
+ReachToggle.BorderSizePixel = 0
+ReachToggle.Parent = Content
+local rtc = Instance.new("UICorner", ReachToggle)
+rtc.CornerRadius = UDim.new(0, 8)
 
--- Botão Ativar/Desativar Hitbox
-local HitboxToggleBtn = Instance.new("TextButton")
-HitboxToggleBtn.Size = UDim2.new(1, 0, 0, 50)
-HitboxToggleBtn.Position = UDim2.new(0, 0, 0, 30)
-HitboxToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-HitboxToggleBtn.Text = "HITBOX: DESATIVADO"
-HitboxToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-HitboxToggleBtn.TextSize = 14
-HitboxToggleBtn.Font = Enum.Font.GothamBold
-HitboxToggleBtn.BorderSizePixel = 0
-HitboxToggleBtn.Parent = ContentFrame
-local HitboxBtnCorner = Instance.new("UICorner")
-HitboxBtnCorner.CornerRadius = UDim.new(0, 8)
-HitboxBtnCorner.Parent = HitboxToggleBtn
-
--- Controle de Tamanho
-local SizeControlFrame = Instance.new("Frame")
-SizeControlFrame.Size = UDim2.new(1, 0, 0, 55)
-SizeControlFrame.Position = UDim2.new(0, 0, 0, 90)
-SizeControlFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-SizeControlFrame.BorderSizePixel = 0
-SizeControlFrame.Parent = ContentFrame
-local SizeFrameCorner = Instance.new("UICorner")
-SizeFrameCorner.CornerRadius = UDim.new(0, 8)
-SizeFrameCorner.Parent = SizeControlFrame
+local SizeRow = Instance.new("Frame")
+SizeRow.Size = UDim2.new(1, 0, 0, 50)
+SizeRow.Position = UDim2.new(0, 0, 0, 82)
+SizeRow.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+SizeRow.BorderSizePixel = 0
+SizeRow.Parent = Content
+local src = Instance.new("UICorner", SizeRow)
+src.CornerRadius = UDim.new(0, 8)
 
 local MinusBtn = Instance.new("TextButton")
-MinusBtn.Size = UDim2.new(0, 45, 0, 40)
-MinusBtn.Position = UDim2.new(0, 5, 0, 7)
+MinusBtn.Size = UDim2.new(0, 42, 0, 38)
+MinusBtn.Position = UDim2.new(0, 5, 0, 6)
 MinusBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 30)
 MinusBtn.Text = "−"
 MinusBtn.TextColor3 = Color3.fromRGB(255, 150, 150)
-MinusBtn.TextSize = 22
+MinusBtn.TextSize = 20
 MinusBtn.Font = Enum.Font.GothamBold
 MinusBtn.BorderSizePixel = 0
-MinusBtn.Parent = SizeControlFrame
-local MinusCorner = Instance.new("UICorner")
-MinusCorner.CornerRadius = UDim.new(0, 6)
-MinusCorner.Parent = MinusBtn
+MinusBtn.Parent = SizeRow
+local mbc2 = Instance.new("UICorner", MinusBtn)
+mbc2.CornerRadius = UDim.new(0, 6)
 
 local SizeInput = Instance.new("TextBox")
-SizeInput.Size = UDim2.new(0, 120, 0, 40)
-SizeInput.Position = UDim2.new(0, 55, 0, 7)
+SizeInput.Size = UDim2.new(0, 110, 0, 38)
+SizeInput.Position = UDim2.new(0, 52, 0, 6)
 SizeInput.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
-SizeInput.Text = tostring(Config.HitboxSize)
+SizeInput.Text = tostring(Config.ReachSize)
 SizeInput.TextColor3 = Color3.fromRGB(0, 255, 150)
-SizeInput.TextSize = 18
+SizeInput.TextSize = 16
 SizeInput.Font = Enum.Font.GothamBold
 SizeInput.BorderSizePixel = 0
-SizeInput.Parent = SizeControlFrame
-local SizeInputCorner = Instance.new("UICorner")
-SizeInputCorner.CornerRadius = UDim.new(0, 6)
-SizeInputCorner.Parent = SizeInput
+SizeInput.Parent = SizeRow
+local sic = Instance.new("UICorner", SizeInput)
+sic.CornerRadius = UDim.new(0, 6)
 
 local PlusBtn = Instance.new("TextButton")
-PlusBtn.Size = UDim2.new(0, 45, 0, 40)
-PlusBtn.Position = UDim2.new(0, 180, 0, 7)
+PlusBtn.Size = UDim2.new(0, 42, 0, 38)
+PlusBtn.Position = UDim2.new(0, 170, 0, 6)
 PlusBtn.BackgroundColor3 = Color3.fromRGB(30, 60, 40)
 PlusBtn.Text = "+"
 PlusBtn.TextColor3 = Color3.fromRGB(150, 255, 180)
-PlusBtn.TextSize = 22
+PlusBtn.TextSize = 20
 PlusBtn.Font = Enum.Font.GothamBold
 PlusBtn.BorderSizePixel = 0
-PlusBtn.Parent = SizeControlFrame
-local PlusCorner = Instance.new("UICorner")
-PlusCorner.CornerRadius = UDim.new(0, 6)
-PlusCorner.Parent = PlusBtn
+PlusBtn.Parent = SizeRow
+local pbc = Instance.new("UICorner", PlusBtn)
+pbc.CornerRadius = UDim.new(0, 6)
+
+local ReachStatus = Instance.new("TextLabel")
+ReachStatus.Size = UDim2.new(1, 0, 0, 20)
+ReachStatus.Position = UDim2.new(0, 0, 0, 136)
+ReachStatus.BackgroundTransparency = 1
+ReachStatus.Font = Enum.Font.Gotham
+ReachStatus.Text = "Ative para visualizar a esfera de alcance."
+ReachStatus.TextColor3 = Color3.fromRGB(150, 150, 180)
+ReachStatus.TextSize = 10
+ReachStatus.Parent = Content
 
 -- ============================================================
--- SEÇÃO: SILENT PASS
+-- BOTÃO FLUTUANTE DE PASSE (SEPARADO E ARRASTÁVEL)
 -- ============================================================
-createSectionLabel(ContentFrame, "🎯 SILENT PASS", 160)
+local PassFloat = Instance.new("TextButton")
+PassFloat.Name = "PassFloat"
+PassFloat.Size = UDim2.new(0, 75, 0, 75)
+PassFloat.Position = UDim2.new(0.85, -75, 0.75, -75)
+PassFloat.BackgroundColor3 = Color3.fromRGB(0, 150, 90)
+PassFloat.Text = "PASSE"
+PassFloat.TextColor3 = Color3.fromRGB(255, 255, 255)
+PassFloat.TextSize = 15
+PassFloat.Font = Enum.Font.GothamBold
+PassFloat.BorderSizePixel = 0
+PassFloat.Active = true
+PassFloat.Parent = ScreenGui
+local pfc = Instance.new("UICorner", PassFloat)
+pfc.CornerRadius = UDim.new(1, 0)
 
-local PassBtn = Instance.new("TextButton")
-PassBtn.Size = UDim2.new(1, 0, 0, 65)
-PassBtn.Position = UDim2.new(0, 0, 0, 190)
-PassBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 80)
-PassBtn.Text = "PASSE"
-PassBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-PassBtn.TextSize = 20
-PassBtn.Font = Enum.Font.GothamBold
-PassBtn.BorderSizePixel = 0
-PassBtn.Parent = ContentFrame
-local PassBtnCorner = Instance.new("UICorner")
-PassBtnCorner.CornerRadius = UDim.new(0, 10)
-PassBtnCorner.Parent = PassBtn
-
-local PassStatus = Instance.new("TextLabel")
-PassStatus.Size = UDim2.new(1, 0, 0, 30)
-PassStatus.Position = UDim2.new(0, 0, 0, 260)
-PassStatus.BackgroundTransparency = 1
-PassStatus.Font = Enum.Font.Gotham
-PassStatus.Text = "Aguardando..."
-PassStatus.TextColor3 = Color3.fromRGB(150, 150, 180)
-PassStatus.TextSize = 12
-PassStatus.Parent = ContentFrame
+local PassStatusLabel = Instance.new("TextLabel")
+PassStatusLabel.Size = UDim2.new(0, 120, 0, 22)
+PassStatusLabel.Position = UDim2.new(0.5, -60, 1, 3)
+PassStatusLabel.BackgroundTransparency = 1
+PassStatusLabel.Font = Enum.Font.Gotham
+PassStatusLabel.Text = ""
+PassStatusLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+PassStatusLabel.TextSize = 9
+PassStatusLabel.Parent = PassFloat
 
 -- ============================================================
--- LÓGICA DO HITBOX EXPANDER
+-- LÓGICA DO REACH (ALCANCE DE CHUTE)
+-- Estratégia: aumenta o tamanho da perna/pé + esfera visual de referência
+-- O HumanoidRootPart NÃO afeta o alcance de chute no jogo
 -- ============================================================
-local function applyHitboxToPlayer(player)
-    if player == LocalPlayer then return end
-    local char = player.Character
-    if not char then return end
-    local hrp = getRootPart(char)
-    if not hrp then return end
-
-    -- Salva tamanho original se ainda não salvou
-    if not State.OriginalSizes[player.UserId] then
-        State.OriginalSizes[player.UserId] = hrp.Size
-    end
-
-    local size = Config.HitboxSize
-    hrp.Size = Vector3.new(size, size, size)
-    hrp.Transparency = Config.HitboxTransparency
-    hrp.BrickColor = BrickColor.new(Config.HitboxColor)
-    hrp.Material = Enum.Material.Neon
-    hrp.CanCollide = false
-end
-
-local function resetHitboxForPlayer(player)
-    local char = player.Character
-    if not char then return end
-    local hrp = getRootPart(char)
-    if not hrp then return end
-
-    local origSize = State.OriginalSizes[player.UserId]
-    if origSize then
-        hrp.Size = origSize
-    else
-        hrp.Size = Vector3.new(2, 2, 1) -- tamanho padrão aproximado do HRP
-    end
-    hrp.Transparency = 0
-    hrp.Material = Enum.Material.Plastic
-    hrp.CanCollide = true
-end
-
-local function updateAllHitboxes()
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            if Config.HitboxEnabled then
-                safeCall(applyHitboxToPlayer, player)
-            else
-                safeCall(resetHitboxForPlayer, player)
-            end
+local function findLegParts(char)
+    local parts = {}
+    for _, name in ipairs({"Right Leg", "Left Leg", "RightFoot", "LeftFoot", "RightUpperLeg", "LeftUpperLeg"}) do
+        local p = char:FindFirstChild(name)
+        if p and p:IsA("BasePart") then
+            table.insert(parts, p)
         end
     end
+    return parts
 end
 
--- Conexões para jogadores entrando/saindo e respawn
-State.Connections.PlayerAdded = Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function()
-        task.wait(0.5)
-        if Config.HitboxEnabled then
-            safeCall(applyHitboxToPlayer, player)
+local function updateReachSphere()
+    if State.ReachSphere then
+        State.ReachSphere:Destroy()
+        State.ReachSphere = nil
+    end
+    if not Config.ReachEnabled then return end
+
+    local char = getChar()
+    local hrp = getHRP(char)
+    if not hrp then return end
+
+    local sphere = Instance.new("Part")
+    sphere.Name = "TCS_ReachSphere"
+    sphere.Shape = Enum.PartType.Ball
+    sphere.Size = Vector3.new(Config.ReachSize * 2, Config.ReachSize * 2, Config.ReachSize * 2)
+    sphere.Transparency = 0.75
+    sphere.CanCollide = false
+    sphere.Anchored = true
+    sphere.CastShadow = false
+    sphere.Material = Enum.Material.Neon
+    sphere.Color = Config.ReachColor
+    sphere.Parent = workspace
+    State.ReachSphere = sphere
+
+    -- Atualiza posição continuamente
+    if State.ReachConn then State.ReachConn:Disconnect() end
+    State.ReachConn = RunService.Heartbeat:Connect(function()
+        if not Config.ReachEnabled or not State.ReachSphere then return end
+        local c = getChar()
+        local h = getHRP(c)
+        if h then
+            State.ReachSphere.CFrame = h.CFrame
         end
     end)
+end
+
+local function applyReach(enable)
+    local char = getChar()
+    if not char then return end
+    local legParts = findLegParts(char)
+
+    for _, part in ipairs(legParts) do
+        if enable then
+            if not part:GetAttribute("TCS_OrigSize") then
+                part:SetAttribute("TCS_OrigSize", part.Size)
+            end
+            local orig = part:GetAttribute("TCS_OrigSize")
+            if orig then
+                part.Size = Vector3.new(orig.X * 1.5, orig.Y, orig.Z * 1.5)
+            end
+            part.CanCollide = false
+        else
+            local orig = part:GetAttribute("TCS_OrigSize")
+            if orig then
+                part.Size = orig
+                part:SetAttribute("TCS_OrigSize", nil)
+            end
+            part.CanCollide = true
+        end
+    end
+
+    updateReachSphere()
+end
+
+ReachToggle.MouseButton1Click:Connect(function()
+    Config.ReachEnabled = not Config.ReachEnabled
+    if Config.ReachEnabled then
+        ReachToggle.Text = "REACH: ATIVADO (" .. Config.ReachSize .. ")"
+        ReachToggle.BackgroundColor3 = Color3.fromRGB(0, 140, 80)
+        ReachStatus.Text = "Esfera verde = alcance visual. O alcance real depende da hitbox da perna."
+    else
+        ReachToggle.Text = "REACH: DESATIVADO"
+        ReachToggle.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+        ReachStatus.Text = "Reach desativado."
+    end
+    safeCall(applyReach, Config.ReachEnabled)
 end)
 
-State.Connections.PlayerRemoving = Players.PlayerRemoving:Connect(function(player)
-    State.OriginalSizes[player.UserId] = nil
+MinusBtn.MouseButton1Click:Connect(function()
+    local v = tonumber(SizeInput.Text) or Config.ReachSize
+    v = math.max(2, v - 1)
+    Config.ReachSize = v
+    SizeInput.Text = tostring(v)
+    if Config.ReachEnabled then
+        ReachToggle.Text = "REACH: ATIVADO (" .. v .. ")"
+        safeCall(updateReachSphere)
+    end
 end)
 
--- Atualiza hitbox quando o personagem local respawna (para reaplicar nos outros)
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
-    if Config.HitboxEnabled then
-        safeCall(updateAllHitboxes)
+PlusBtn.MouseButton1Click:Connect(function()
+    local v = tonumber(SizeInput.Text) or Config.ReachSize
+    v = math.min(25, v + 1)
+    Config.ReachSize = v
+    SizeInput.Text = tostring(v)
+    if Config.ReachEnabled then
+        ReachToggle.Text = "REACH: ATIVADO (" .. v .. ")"
+        safeCall(updateReachSphere)
+    end
+end)
+
+SizeInput.FocusLost:Connect(function()
+    local v = tonumber(SizeInput.Text)
+    if v then
+        v = math.clamp(v, 2, 25)
+        Config.ReachSize = v
+        SizeInput.Text = tostring(v)
+        if Config.ReachEnabled then
+            ReachToggle.Text = "REACH: ATIVADO (" .. v .. ")"
+            safeCall(updateReachSphere)
+        end
+    else
+        SizeInput.Text = tostring(Config.ReachSize)
     end
 end)
 
 -- ============================================================
--- LÓGICA DO SILENT PASS
+-- LÓGICA DO SILENT PASS (MAPEAR COMPANHEIROS + TOOL LONG)
 -- ============================================================
-local function getTeammates()
-    local teammates = {}
-    local myTeam = LocalPlayer.Team
-    if not myTeam then return teammates end
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Team == myTeam then
-            local char = player.Character
-            if char then
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                local hrp = getRootPart(char)
-                if humanoid and humanoid.Health > 0 and hrp then
-                    table.insert(teammates, {
-                        Player = player,
+-- Retorna todos os companheiros de equipe vivos com HumanoidRootPart
+local function getTeammates()
+    local list = {}
+    local myTeam = LocalPlayer.Team
+    if not myTeam then return list end
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Team == myTeam then
+            local c = p.Character
+            if c then
+                local hum = getHumanoid(c)
+                local hrp = getHRP(c)
+                if hum and hum.Health > 0 and hrp then
+                    table.insert(list, {
+                        Player = p,
                         HRP = hrp,
-                        Humanoid = humanoid,
+                        Humanoid = hum,
                     })
                 end
             end
         end
     end
-    return teammates
+    return list
 end
 
+-- Seleciona o melhor alvo: prioriza quem está mais à frente no campo
+-- Considerando distância útil e evitando jogadores muito próximos
 local function getBestPassTarget()
-    local myChar = getCharacter()
-    local myHRP = getRootPart(myChar)
+    local myChar = getChar()
+    local myHRP = getHRP(myChar)
     if not myHRP then return nil end
 
     local myPos = myHRP.Position
-    local teammates = getTeammates()
-    if #teammates == 0 then return nil end
+    local candidates = getTeammates()
+    if #candidates == 0 then return nil end
 
-    -- Filtra: prioriza jogadores mais à frente (eixo Z positivo = direção do gol adversário, aproximado)
-    -- e com distância razoável (nem muito perto, nem muito longe)
-    local bestTarget = nil
+    local best = nil
     local bestScore = -math.huge
 
-    for _, tm in ipairs(teammates) do
-        local distance = (tm.HRP.Position - myPos).Magnitude
-        if distance > 10 and distance < 150 then -- faixa de distância útil
-            local forwardness = tm.HRP.Position.Z - myPos.Z -- quanto mais à frente, melhor
-            local score = forwardness - (distance * 0.1) -- penaliza distância excessiva
+    for _, tm in ipairs(candidates) do
+        local dist = (tm.HRP.Position - myPos).Magnitude
+        -- Filtro de distância: não muito perto (evita passe inútil), não muito longe
+        if dist >= Config.PassTargetDistanceMin and dist <= Config.PassTargetDistanceMax then
+            -- Score: quanto mais à frente (Z maior) e mais próximo, melhor
+            -- O eixo Z no futebol do Roblox geralmente aponta para o gol adversário
+            local forwardness = tm.HRP.Position.Z - myPos.Z
+            local score = (forwardness * Config.ForwardBias) - (dist * 0.5)
 
-            -- Verifica se não há obstáculo imediato (simplificado)
+            -- Bônus se o companheiro estiver mais perto do gol adversário
+            -- (assumindo que o gol fica no Z positivo)
+            if tm.HRP.Position.Z > myPos.Z then
+                score = score + 50
+            end
+
             if score > bestScore then
                 bestScore = score
-                bestTarget = tm
+                best = tm
             end
         end
     end
 
-    -- Fallback: se ninguém passou no filtro, pega o mais próximo
-    if not bestTarget then
-        local minDist = math.huge
-        for _, tm in ipairs(teammates) do
-            local d = (tm.HRP.Position - myPos).Magnitude
-            if d < minDist then
-                minDist = d
-                bestTarget = tm
+    -- Fallback: se ninguém passou no filtro, pega o mais à frente disponível
+    if not best then
+        for _, tm in ipairs(candidates) do
+            local fwd = tm.HRP.Position.Z - myPos.Z
+            if fwd > (best and (best.HRP.Position.Z - myPos.Z) or -math.huge) then
+                best = tm
             end
         end
     end
 
-    return bestTarget
+    return best
 end
 
-local function findTool(name)
-    local char = getCharacter()
-    if not char then return nil end
+-- Encontra e usa a Tool "Long" (ou "Passe" como alternativa)
+local function findPassTool()
     local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if backpack then
-        local tool = backpack:FindFirstChild(name)
-        if tool then return tool end
+    local char = getChar()
+
+    -- Primeiro procura "Long"
+    for _, container in ipairs({backpack, char}) do
+        if container then
+            local tool = container:FindFirstChild("Long")
+            if tool and tool:IsA("Tool") then return tool end
+        end
     end
-    -- Verifica se já está equipada
-    for _, child in ipairs(char:GetChildren()) do
-        if child:IsA("Tool") and child.Name == name then
-            return child
+    -- Fallback: "Passe"
+    for _, container in ipairs({backpack, char}) do
+        if container then
+            local tool = container:FindFirstChild("Passe")
+            if tool and tool:IsA("Tool") then return tool end
         end
     end
     return nil
 end
 
-local function executeSilentPass()
+local function executePass()
     local now = tick()
-    if now - Config.LastPassTime < Config.SilentPassCooldown then
-        PassStatus.Text = "⏳ Aguarde o cooldown..."
+    if now - Config.LastPassTime < Config.PassCooldown then
+        PassStatusLabel.Text = "⏳ Aguarde..."
         return
     end
 
     local target = getBestPassTarget()
     if not target then
-        PassStatus.Text = "❌ Nenhum companheiro disponível."
+        PassStatusLabel.Text = "❌ Sem companheiro"
         return
     end
 
-    -- Tenta usar a Tool "Passe" ou "Long" se disponível
-    local passTool = findTool("Passe") or findTool("Long")
-    local char = getCharacter()
+    local char = getChar()
+    local hum = getHumanoid(char)
+    if not hum then
+        PassStatusLabel.Text = "❌ Sem personagem"
+        return
+    end
 
-    if passTool and passTool:IsA("Tool") then
-        -- Equipa a tool se não estiver equipada
-        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-        if humanoid and passTool.Parent ~= char then
+    -- Tenta equipar e ativar a Tool "Long"
+    local tool = findPassTool()
+    if tool then
+        -- Equipa se necessário
+        if tool.Parent ~= char then
             safeCall(function()
-                humanoid:EquipTool(passTool)
+                hum:EquipTool(tool)
             end)
-            task.wait(0.1)
+            task.wait(0.15)
         end
 
-        -- Ativa a tool (simula clique/ativação)
-        safeCall(function()
-            passTool:Activate()
-        end)
-        PassStatus.Text = "✅ Passe executado (Tool: " .. passTool.Name .. ") → " .. target.Player.Name
+        -- Ativa a tool (simula o clique de passe)
+        if tool.Parent == char then
+            safeCall(function()
+                tool:Activate()
+            end)
+            PassStatusLabel.Text = "✅ Long → " .. target.Player.Name
+        else
+            PassStatusLabel.Text = "⚠️ Falha ao equipar"
+        end
     else
-        -- Fallback: tenta simular o botão de passe nativo via VirtualInputManager
-        -- Nota: não há garantia de que o jogo responda a inputs virtuais, mas é uma tentativa segura
+        -- Fallback: toque virtual na região do botão de passe (canto inferior direito)
         safeCall(function()
-            local viewport = workspace.CurrentCamera.ViewportSize
-            -- Tenta um toque no centro da tela (área comum do botão de passe em mobile)
-            VirtualInputManager:SendMouseButtonEvent(viewport.X * 0.7, viewport.Y * 0.8, 0, true, game, 0)
+            local vp = workspace.CurrentCamera.ViewportSize
+            VirtualInputManager:SendMouseButtonEvent(vp.X * 0.8, vp.Y * 0.8, 0, true, game, 0)
             task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(viewport.X * 0.7, viewport.Y * 0.8, 0, false, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(vp.X * 0.8, vp.Y * 0.8, 0, false, game, 0)
         end)
-        PassStatus.Text = "⚠️ Tool não encontrada. Tentativa via input virtual → " .. target.Player.Name
+        PassStatusLabel.Text = "⚠️ Tool não achada. Toque virtual → " .. target.Player.Name
     end
 
     Config.LastPassTime = now
 end
 
--- ============================================================
--- CALLBACKS DOS BOTÕES
--- ============================================================
-HitboxToggleBtn.MouseButton1Click:Connect(function()
-    Config.HitboxEnabled = not Config.HitboxEnabled
-    if Config.HitboxEnabled then
-        HitboxToggleBtn.Text = "HITBOX: ATIVADO"
-        HitboxToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 80)
-        safeCall(updateAllHitboxes)
-    else
-        HitboxToggleBtn.Text = "HITBOX: DESATIVADO"
-        HitboxToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-        safeCall(updateAllHitboxes)
-    end
-end)
-
-MinusBtn.MouseButton1Click:Connect(function()
-    local val = tonumber(SizeInput.Text) or Config.HitboxSize
-    val = math.max(2, val - 1)
-    Config.HitboxSize = val
-    SizeInput.Text = tostring(val)
-    if Config.HitboxEnabled then safeCall(updateAllHitboxes) end
-end)
-
-PlusBtn.MouseButton1Click:Connect(function()
-    local val = tonumber(SizeInput.Text) or Config.HitboxSize
-    val = math.min(50, val + 1)
-    Config.HitboxSize = val
-    SizeInput.Text = tostring(val)
-    if Config.HitboxEnabled then safeCall(updateAllHitboxes) end
-end)
-
-SizeInput.FocusLost:Connect(function()
-    local val = tonumber(SizeInput.Text)
-    if val then
-        val = math.clamp(val, 2, 50)
-        Config.HitboxSize = val
-        SizeInput.Text = tostring(val)
-        if Config.HitboxEnabled then safeCall(updateAllHitboxes) end
-    else
-        SizeInput.Text = tostring(Config.HitboxSize)
-    end
-end)
-
-PassBtn.MouseButton1Click:Connect(function()
-    safeCall(executeSilentPass)
+PassFloat.MouseButton1Click:Connect(function()
+    safeCall(executePass)
 end)
 
 -- ============================================================
--- DRAG (ARRASTAR) DA JANELA — COMPATÍVEL COM TOUCH
+-- DRAG DO MENU (TITLEBAR)
 -- ============================================================
-local dragging = false
-local dragStart = nil
-local startPos = nil
-
+local dragMenu, dragStart, startPos
 TitleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragMenu = true
         dragStart = input.Position
         startPos = MainFrame.Position
         input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
+            if input.UserInputState == Enum.UserInputState.End then dragMenu = false end
         end)
     end
 end)
-
 UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y
-        )
+    if dragMenu and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        local d = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+
+-- ============================================================
+-- DRAG DO BOTÃO FLUTUANTE DE PASSE
+-- ============================================================
+local dragPass, passDragStart, passStartPos
+PassFloat.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragPass = true
+        passDragStart = input.Position
+        passStartPos = PassFloat.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragPass = false end
+        end)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragPass and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        local d = input.Position - passDragStart
+        PassFloat.Position = UDim2.new(passStartPos.X.Scale, passStartPos.X.Offset + d.X, passStartPos.Y.Scale, passStartPos.Y.Offset + d.Y)
     end
 end)
 
 -- ============================================================
 -- MINIMIZAR / FECHAR
 -- ============================================================
-MinimizeBtn.MouseButton1Click:Connect(function()
+local ReopenBtn = nil
+MinBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
-    -- Cria botão flutuante para reabrir
-    local reopenBtn = ScreenGui:FindFirstChild("ReopenBtn")
-    if not reopenBtn then
-        reopenBtn = Instance.new("TextButton")
-        reopenBtn.Name = "ReopenBtn"
-        reopenBtn.Size = UDim2.new(0, 60, 0, 60)
-        reopenBtn.Position = UDim2.new(0, 20, 0.5, -30)
-        reopenBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 120)
-        reopenBtn.Text = "⚽"
-        reopenBtn.TextSize = 28
-        reopenBtn.Font = Enum.Font.GothamBold
-        reopenBtn.BorderSizePixel = 0
-        reopenBtn.Parent = ScreenGui
-        local c = Instance.new("UICorner")
+    if not ReopenBtn then
+        ReopenBtn = Instance.new("TextButton")
+        ReopenBtn.Size = UDim2.new(0, 55, 0, 55)
+        ReopenBtn.Position = UDim2.new(0, 15, 0.5, -27)
+        ReopenBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 120)
+        ReopenBtn.Text = "⚽"
+        ReopenBtn.TextSize = 24
+        ReopenBtn.Font = Enum.Font.GothamBold
+        ReopenBtn.BorderSizePixel = 0
+        ReopenBtn.Parent = ScreenGui
+        local c = Instance.new("UICorner", ReopenBtn)
         c.CornerRadius = UDim.new(1, 0)
-        c.Parent = reopenBtn
-        reopenBtn.MouseButton1Click:Connect(function()
+        ReopenBtn.MouseButton1Click:Connect(function()
             MainFrame.Visible = true
-            reopenBtn:Destroy()
+            ReopenBtn:Destroy()
+            ReopenBtn = nil
         end)
     end
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
+    Config.ReachEnabled = false
+    safeCall(applyReach, false)
+    if State.ReachSphere then State.ReachSphere:Destroy() end
+    if State.ReachConn then State.ReachConn:Disconnect() end
     ScreenGui:Destroy()
-    -- Limpa conexões
-    for _, conn in pairs(State.Connections) do
-        safeCall(function() conn:Disconnect() end)
-    end
-    -- Restaura hitboxes
-    Config.HitboxEnabled = false
-    safeCall(updateAllHitboxes)
 end)
 
 -- ============================================================
 -- INICIALIZAÇÃO
 -- ============================================================
-print("[TCS V1] Script carregado com sucesso.")
-PassStatus.Text = "✅ Pronto. Pressione PASSE quando tiver a bola."
+print("[TCS V2] Carregado. Reach: pernas. Pass: botão flutuante arrastável.")
